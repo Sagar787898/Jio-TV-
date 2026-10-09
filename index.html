@@ -111,8 +111,9 @@ $('load').onclick = load;
 $('url').onkeydown = e => e.key === 'Enter' && load();
 $('search').oninput = render;
 $('group').onchange = render;
-const saved = localStorage.getItem('m3u');
-if (saved) { $('url').value = saved; load(); }
+const DEFAULT_M3U = 'https://iptv-org.github.io/iptv/countries/in.m3u';
+$('url').value = localStorage.getItem('m3u') || DEFAULT_M3U;
+load();
 </script>
 </body>
 </html>
