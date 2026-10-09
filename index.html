@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Online TV</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #000; color: #f2f2f2; }
+  .app { max-width: 1100px; margin: 0 auto; padding-bottom: 32px; }
+  header { position: sticky; top: 0; z-index: 5; background: #000; padding: 14px 16px 0; }
+  .top { display: flex; align-items: center; gap: 12px; }
+  .title { font-weight: 700; font-size: 20px; flex: 1; }
+  #search { background: #161616; border: 1px solid #2a2a2a; color: #fff; border-radius: 20px; padding: 8px 14px; width: 220px; font: inherit; font-size: 14px; }
+  #search:focus { outline: none; border-color: #f5a623; }
+  nav { display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid #1c1c1c; overflow-x: auto; }
+  nav button { background: none; border: none; color: #aaa; font: inherit; font-size: 13px; padding: 10px 14px; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+  nav button.on { color: #f5a623; border-bottom-color: #f5a623; }
+  .player { margin: 16px; background: #111; border-radius: 12px; overflow: hidden; }
+  video { width: 100%; aspect-ratio: 16/9; background: #000; display: block; }
+  .info { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; gap: 12px; }
+  .info b { font-size: 17px; }
+  .info small { color: #999; display: block; margin-top: 2px; }
+  .live { background: #f5a623; color: #000; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 12px; }
+  .sec { padding: 8px 16px; }
+  .sec h3 { display: flex; justify-content: space-between; font-size: 15px; margin: 16px 0 10px; }
+  .sec h3 a { color: #888; font-size: 12px; font-weight: 400; cursor: pointer; }
+  .row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; }
+  .card { flex: 0 0 120px; cursor: pointer; text-align: center; }
+  .logo { width: 100%; aspect-ratio: 16/10; background: #fff; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; border: 2px solid transparent; color: #000; font-weight: 700; font-size: 13px; padding: 6px; }
+  .logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .card:hover .logo, .card.active .logo { border-color: #f5a623; }
+  .card span { display: block; font-size: 11px; color: #ccc; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list { display: flex; flex-direction: column; }
+  .item { display: flex; align-items: center; gap: 16px; padding: 10px 0; border-bottom: 1px solid #1a1a1a; cursor: pointer; }
+  .item .logo { width: 72px; flex: 0 0 72px; }
+  .item b { font-size: 14px; font-weight: 600; }
+  .item small { color: #888; display: block; margin-top: 4px; font-size: 12px; }
+  .item.active b { color: #f5a623; }
+  .msg { color: #888; text-align: center; padding: 40px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="top">
+      <div class="title">Online TV</div>
+      <input id="search" placeholder="Search channels">
+    </div>
+    <nav id="tabs"></nav>
+  </header>
+  <div class="player">
+    <video id="video" controls autoplay playsinline muted></video>
+    <div class="info">
+      <div><b id="now">Loading...</b><small id="status"></small></div>
+      <span class="live">● LIVE</span>
+    </div>
+  </div>
+  <div id="content"><div class="msg">Channels load ho rahe hain...</div></div>
+</div>
+<script>
+const PLAYLIST = 'https://iptv-org.github.io/iptv/countries/in.m3u';
+const TABS = ['Home', 'Live TV', 'News', 'Entertainment', 'Movies', 'Music', 'Kids', 'Sports', 'Religious'];
+const $ = id => document.getElementById(id);
+let channels = [], tab = 'Home', hls, current;
+
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const clean = n => n.replace(/\s*\[.*?\]|\s*\(\d+[pi]\)/g, '').trim();
+
+function parse(text) {
+  const out = []; let cur = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (l.startsWith('#EXTINF')) {
+      const a = k => (l.match(new RegExp(k + '="([^"]*)"')) || [])[1] || '';
+      cur = { name: clean(l.split(',').pop()), logo: a('tvg-logo'), group: (a('group-title') || 'Other').split(';')[0] };
+    } else if (l && !l.startsWith('#') && cur) { cur.url = l; out.push(cur); cur = null; }
+  }
+  return out.filter(c => !/Geo-blocked/i.test(c.name));
+}
+
+const logo = c => `<div class="logo">${c.logo ? `<img loading="lazy" alt="" src="${esc(c.logo)}" onerror="this.replaceWith(document.createTextNode('${esc(c.name).replace(/'/g, '')}'))">` : esc(c.name)}</div>`;
+const card = (c, i) => `<div class="card${c === current ? ' active' : ''}" data-i="${i}">${logo(c)}<span>${esc(c.name)}</span></div>`;
+const item = (c, i) => `<div class="item${c === current ? ' active' : ''}" data-i="${i}">${logo(c)}<div><b>${esc(c.name)}</b><small>${esc(c.group)}</small></div></div>`;
+
+function render() {
+  $('tabs').innerHTML = TABS.map(t => `<button class="${t === tab ? 'on' : ''}">${t}</button>`).join('');
+  const q = $('search').value.toLowerCase();
+  const idx = c => channels.indexOf(c);
+  let list = channels.filter(c => c.name.toLowerCase().includes(q));
+  let html = '';
+  if (tab === 'Home' && !q) {
+    html += `<div class="sec"><h3>All Channels <a data-tab="Live TV">More</a></h3><div class="row">${list.slice(0, 20).map(c => card(c, idx(c))).join('')}</div></div>`;
+    for (const g of TABS.slice(2)) {
+      const gl = list.filter(c => c.group === g).slice(0, 20);
+      if (gl.length) html += `<div class="sec"><h3>${g} <a data-tab="${g}">More</a></h3><div class="row">${gl.map(c => card(c, idx(c))).join('')}</div></div>`;
+    }
+  } else {
+    if (tab !== 'Home' && tab !== 'Live TV') list = list.filter(c => c.group === tab);
+    html = `<div class="sec"><div class="list">${list.map(c => item(c, idx(c))).join('') || '<div class="msg">Koi channel nahi mila</div>'}</div></div>`;
+  }
+  $('content').innerHTML = html;
+}
+
+function play(c) {
+  current = c;
+  const v = $('video');
+  $('now').textContent = c.name; $('status').textContent = c.group;
+  if (hls) { hls.destroy(); hls = null; }
+  if (window.Hls && Hls.isSupported()) {
+    hls = new Hls(); hls.loadSource(c.url); hls.attachMedia(v);
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) $('status').textContent = 'Ye channel abhi available nahi hai'; });
+  } else v.src = c.url;
+  v.play().catch(() => {});
+  render();
+}
+
+$('tabs').onclick = e => { if (e.target.tagName === 'BUTTON') { tab = e.target.textContent; render(); } };
+$('content').onclick = e => {
+  const more = e.target.closest('[data-tab]');
+  if (more) { tab = more.dataset.tab; render(); return; }
+  const el = e.target.closest('[data-i]');
+  if (el) { play(channels[+el.dataset.i]); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+};
+$('search').oninput = render;
+
+fetch(PLAYLIST).then(r => r.text()).then(t => {
+  channels = parse(t);
+  const first = channels.find(c => /DD National/i.test(c.name)) || channels[0];
+  if (first) play(first); else render();
+}).catch(() => { $('content').innerHTML = '<div class="msg">Channels load nahi ho paaye. Page refresh karein.</div>'; });
+</script>
+</body>
+</html>
