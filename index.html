@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live TV Player</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0b0f1a; color: #e8ecf5; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; background: #0f1528; border-bottom: 1px solid #1e2742; flex-wrap: wrap; }
+  .logo { font-weight: 800; font-size: 22px; color: #fff; }
+  .logo span { color: #d9008d; }
+  input, select, button { font: inherit; border-radius: 8px; border: 1px solid #2a3558; background: #151d36; color: #e8ecf5; padding: 9px 12px; }
+  button { background: #d9008d; border-color: #d9008d; cursor: pointer; font-weight: 600; }
+  button:hover { background: #b80078; }
+  #url { flex: 1; min-width: 240px; }
+  main { display: grid; grid-template-columns: 1fr 360px; gap: 20px; padding: 20px 24px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  video { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; }
+  #now { margin: 12px 0 0; font-size: 18px; font-weight: 600; }
+  #status { color: #8d97b5; font-size: 14px; margin-top: 4px; }
+  .side { display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 110px); }
+  #list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .ch { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 10px; background: #121a31; cursor: pointer; border: 1px solid transparent; }
+  .ch:hover { border-color: #2a3558; }
+  .ch.active { border-color: #d9008d; }
+  .ch img { width: 48px; height: 36px; object-fit: contain; background: #fff1; border-radius: 6px; }
+  .ch small { color: #8d97b5; display: block; }
+  .empty { color: #8d97b5; padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Live<span>TV</span></div>
+  <input id="url" placeholder="Paste your M3U playlist URL">
+  <button id="load">Load Playlist</button>
+</header>
+<main>
+  <section>
+    <video id="video" controls autoplay playsinline></video>
+    <div id="now">Koi channel select karein</div>
+    <div id="status">Enter a playlist URL to get started.</div>
+  </section>
+  <aside class="side">
+    <input id="search" placeholder="Search channels...">
+    <select id="group"><option value="">All categories</option></select>
+    <div id="list"><div class="empty">No channels loaded</div></div>
+  </aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let channels = [], hls;
+
+function parseM3U(text) {
+  const out = []; let cur = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith('#EXTINF')) {
+      const attr = k => (line.match(new RegExp(k + '="([^"]*)"')) || [])[1] || '';
+      cur = { name: line.split(',').pop().trim(), logo: attr('tvg-logo'), group: attr('group-title') || 'Other' };
+    } else if (line && !line.startsWith('#') && cur) {
+      cur.url = line; out.push(cur); cur = null;
+    }
+  }
+  return out;
+}
+
+async function load() {
+  const url = $('url').value.trim(); if (!url) return;
+  localStorage.setItem('m3u', url);
+  $('status').textContent = 'Loading playlist...';
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    channels = parseM3U(await res.text());
+    const groups = [...new Set(channels.map(c => c.group))].sort();
+    $('group').innerHTML = '<option value="">All categories</option>' + groups.map(g => `<option>${g}</option>`).join('');
+    $('status').textContent = channels.length + ' channels loaded.';
+    render();
+  } catch (e) {
+    $('status').textContent = 'Could not load playlist (' + e.message + '). The server may block cross-origin (CORS) requests.';
+  }
+}
+
+function render() {
+  const q = $('search').value.toLowerCase(), g = $('group').value;
+  const list = channels.filter(c => (!g || c.group === g) && c.name.toLowerCase().includes(q));
+  $('list').innerHTML = list.length ? '' : '<div class="empty">No channels found</div>';
+  list.slice(0, 500).forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'ch';
+    el.innerHTML = `<img alt="" src="${c.logo}" onerror="this.style.visibility='hidden'"><div>${c.name}<small>${c.group}</small></div>`;
+    el.onclick = () => { document.querySelectorAll('.ch.active').forEach(x => x.classList.remove('active')); el.classList.add('active'); play(c); };
+    $('list').appendChild(el);
+  });
+}
+
+function play(c) {
+  const v = $('video');
+  $('now').textContent = c.name; $('status').textContent = c.group;
+  if (hls) { hls.destroy(); hls = null; }
+  if (window.Hls && Hls.isSupported() && /\.m3u8|\/hls|playlist/i.test(c.url)) {
+    hls = new Hls(); hls.loadSource(c.url); hls.attachMedia(v);
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) $('status').textContent = 'Stream failed to play.'; });
+  } else { v.src = c.url; }
+  v.play().catch(() => {});
+}
+
+$('load').onclick = load;
+$('url').onkeydown = e => e.key === 'Enter' && load();
+$('search').oninput = render;
+$('group').onchange = render;
+const saved = localStorage.getItem('m3u');
+if (saved) { $('url').value = saved; load(); }
+</script>
+</body>
+</html>
